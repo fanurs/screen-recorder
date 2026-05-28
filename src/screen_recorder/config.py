@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from datetime import datetime
 
@@ -46,6 +47,7 @@ class Config:
     crf: int = 16
     use_nvenc: bool = False
     container: str = "mp4"        # "mp4" or "mkv"
+    append_timestamp: bool = True  # auto-name with timestamp; otherwise use a fixed name
 
     def __post_init__(self) -> None:
         if not self.output_dir:
@@ -78,6 +80,28 @@ class Config:
             pass
 
     # --------------------------------------------------------------- helpers
-    def next_output_path(self) -> str:
-        """A fresh timestamped path in the configured output dir."""
-        return os.path.join(self.output_dir, timestamped_filename(self.container))
+    def next_output_path(self, exists: Callable[[str], bool] = os.path.exists) -> str:
+        """Path the next recording should write to, given the current settings.
+
+        With ``append_timestamp`` on: a timestamped name; if a same-second
+        collision exists, a ``-1``/``-2``/… suffix is appended until the path is
+        free. With it off: the fixed name ``recording.<ext>`` (caller decides
+        whether to overwrite).
+        """
+        if self.append_timestamp:
+            base = timestamped_filename(self.container)
+            return _collision_free(os.path.join(self.output_dir, base), exists)
+        return os.path.join(self.output_dir, f"recording.{self.container}")
+
+
+def _collision_free(path: str, exists: Callable[[str], bool] = os.path.exists) -> str:
+    """Return ``path`` if free, else ``path-1``, ``path-2``, … until one is."""
+    if not exists(path):
+        return path
+    stem, ext = os.path.splitext(path)
+    n = 1
+    while True:
+        candidate = f"{stem}-{n}{ext}"
+        if not exists(candidate):
+            return candidate
+        n += 1

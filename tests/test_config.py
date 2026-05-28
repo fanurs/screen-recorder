@@ -63,3 +63,44 @@ def test_next_output_path_is_timestamped_and_in_dir():
 def test_container_drives_extension():
     assert Config(container="mkv").next_output_path().endswith(".mkv")
     assert Config(container="mp4").next_output_path().endswith(".mp4")
+
+
+# ----------------------------------------------------- filename collisions
+
+def test_timestamped_path_avoids_collision_within_same_second(tmp_path):
+    """Two rapid recordings in the same second must NOT overwrite each other."""
+    c = Config(output_dir=str(tmp_path), append_timestamp=True)
+    first = c.next_output_path()
+    # Simulate the first recording being on disk before the second request.
+    open(first, "a").close()
+    second = c.next_output_path()  # called within the same second
+    assert second != first
+    assert not os.path.exists(second)  # i.e. it's a free path, ready to use
+
+
+def test_timestamped_path_keeps_incrementing_under_many_collisions(tmp_path):
+    """If even the -1, -2, … candidates exist, we keep going until free."""
+    c = Config(output_dir=str(tmp_path), append_timestamp=True)
+    taken = {c.next_output_path() for _ in range(5)}
+    # The Config doesn't know about taken paths by itself; simulate them on
+    # disk and confirm the next call avoids every one.
+    for p in taken:
+        open(p, "a").close()
+    fresh = c.next_output_path()
+    assert fresh not in taken
+
+
+def test_fixed_name_mode_returns_stable_path(tmp_path):
+    """With timestamping off, the path is stable — caller must handle overwrite."""
+    c = Config(output_dir=str(tmp_path), append_timestamp=False, container="mp4")
+    p1 = c.next_output_path()
+    p2 = c.next_output_path()
+    assert p1 == p2
+    assert p1.endswith("recording.mp4")
+
+
+def test_append_timestamp_persists_through_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setattr(cfgmod, "config_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(cfgmod, "config_path", lambda: str(tmp_path / "config.json"))
+    Config(append_timestamp=False).save()
+    assert Config.load().append_timestamp is False

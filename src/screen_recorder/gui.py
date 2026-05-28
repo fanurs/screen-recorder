@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -287,6 +288,15 @@ class MainWindow(QWidget):
         file_row.addWidget(self._file_label, 1)
         out.addLayout(file_row)
 
+        self._timestamp_cb = QCheckBox("Append timestamp to filename")
+        self._timestamp_cb.setChecked(True)
+        self._timestamp_cb.setToolTip(
+            "When on, each recording is named with the current date/time so "
+            "they never overwrite each other."
+        )
+        self._timestamp_cb.toggled.connect(self._on_timestamp_toggled)
+        out.addWidget(self._timestamp_cb)
+
         self._estimate_label = QLabel()
         self._estimate_label.setObjectName("estimate")
         out.addWidget(self._estimate_label)
@@ -336,6 +346,7 @@ class MainWindow(QWidget):
             i = self._enc_combo.findData(True)
             if i >= 0:
                 self._enc_combo.setCurrentIndex(i)
+        self._timestamp_cb.setChecked(c.append_timestamp)
         self._update_file_label()
 
     def _capture_config(self) -> Config:
@@ -344,19 +355,41 @@ class MainWindow(QWidget):
         self._config.fps = self._fps_slider.value()
         self._config.crf = self._crf_slider.value()
         self._config.use_nvenc = bool(self._enc_combo.currentData())
+        self._config.append_timestamp = self._timestamp_cb.isChecked()
         return self._config
+
+    def _on_timestamp_toggled(self, checked: bool) -> None:
+        self._config.append_timestamp = checked
+        # Toggling the auto-naming mode invalidates any prior explicit path
+        # the user picked — the new mode should be honoured for the next run.
+        self._explicit_output = None
+        self._update_file_label()
 
     def _update_file_label(self) -> None:
         if self._explicit_output:
             self._file_label.setText(self._explicit_output)
-        else:
+        elif self._config.append_timestamp:
             self._file_label.setText(
                 f"{self._config.output_dir}\\  (auto-named, timestamped)"
+            )
+        else:
+            self._file_label.setText(
+                f"{self._config.output_dir}\\recording.{self._config.container}"
             )
 
     def _resolve_output_path(self) -> str:
         """The path this recording will be written to."""
         return self._explicit_output or self._config.next_output_path()
+
+    def _needs_overwrite_prompt(self, path: str) -> bool:
+        """True when an existing file at ``path`` could be silently clobbered.
+
+        Auto-timestamped paths are already collision-free, so we only need to
+        guard the fixed-name and explicit ``Save to…`` cases.
+        """
+        if self._explicit_output:
+            return True
+        return not self._config.append_timestamp
 
     # ------------------------------------------------------------- population
     def _populate_windows(self) -> None:
@@ -528,6 +561,20 @@ class MainWindow(QWidget):
         except OSError as exc:
             QMessageBox.critical(self, "Cannot save there", f"Could not create the output folder:\n{exc}")
             return
+
+        # When timestamping is on, next_output_path() already returned a
+        # collision-free path. Otherwise (fixed name or explicit Save to…),
+        # confirm before silently clobbering an existing recording.
+        if self._needs_overwrite_prompt(output_path) and os.path.exists(output_path):
+            reply = QMessageBox.question(
+                self,
+                "Overwrite existing file?",
+                f"{output_path}\nalready exists. Overwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
 
         m = self._selected_monitor()
         capture_index = m.capture_index if m else 1

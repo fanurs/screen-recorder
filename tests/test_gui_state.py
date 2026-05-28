@@ -8,6 +8,8 @@ FFmpeg or touching a real screen.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from PySide6.QtGui import QGuiApplication
 
@@ -239,3 +241,119 @@ def test_config_seeds_controls_on_launch(qtbot, fake_monitors, tmp_path):
     assert w._res_combo.currentData() == 1080
     assert w._fps_slider.value() == 50
     assert w._crf_slider.value() == 22
+
+
+# --------------------------------------------------- timestamp checkbox
+
+def test_timestamp_on_produces_distinct_paths_for_rapid_recordings(window, tmp_path):
+    """Two recordings in quick succession must not clobber each other."""
+    window._timestamp_cb.setChecked(True)
+    window._seg_buttons["monitor"].setChecked(True)
+
+    window._toggle_record()
+    first = FakeRecorder.instances[-1].settings.output_path
+    open(first, "a").close()  # simulate the file having been written
+    window._toggle_record()  # stop
+
+    window._toggle_record()  # start a second recording
+    second = FakeRecorder.instances[-1].settings.output_path
+    window._toggle_record()  # stop
+
+    assert first != second
+
+
+def test_timestamp_off_uses_stable_filename(window, monkeypatch):
+    """With the checkbox unticked, repeated recordings reuse the same name."""
+    # Auto-accept the overwrite prompt so the second start can proceed.
+    monkeypatch.setattr(
+        "screen_recorder.gui.QMessageBox.question",
+        lambda *a, **k: __import__("PySide6").QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+    window._timestamp_cb.setChecked(False)
+    window._seg_buttons["monitor"].setChecked(True)
+
+    window._toggle_record()
+    first = FakeRecorder.instances[-1].settings.output_path
+    open(first, "a").close()
+    window._toggle_record()
+
+    window._toggle_record()
+    second = FakeRecorder.instances[-1].settings.output_path
+    window._toggle_record()
+
+    assert first == second   # stable name; user confirmed overwrite
+
+
+def test_timestamp_off_does_not_overwrite_if_user_declines(window, monkeypatch):
+    """User says No to the overwrite prompt -> the recording does not start."""
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(
+        "screen_recorder.gui.QMessageBox.question",
+        lambda *a, **k: QMessageBox.StandardButton.No,
+    )
+    window._timestamp_cb.setChecked(False)
+    window._seg_buttons["monitor"].setChecked(True)
+
+    # Pre-create the fixed-name file so the prompt will be triggered.
+    open(window._resolve_output_path(), "a").close()
+    before = len(FakeRecorder.instances)
+    window._toggle_record()
+    assert len(FakeRecorder.instances) == before   # no recorder constructed
+    assert window._recorder is None
+
+
+# ----------------------------------------------- output dir auto-create
+
+def test_output_dir_is_created_at_record_time(qtbot, fake_monitors, tmp_path, monkeypatch):
+    """Starting a recording with a non-existent output dir creates it."""
+    from screen_recorder import config as cfgmod
+    from screen_recorder.config import Config
+
+    monkeypatch.setattr(cfgmod, "config_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(cfgmod, "config_path", lambda: str(tmp_path / "c.json"))
+
+    FakeRecorder.instances.clear()
+    missing_dir = tmp_path / "does" / "not" / "exist"
+    assert not missing_dir.exists()
+    cfg = Config(output_dir=str(missing_dir))
+    w = MainWindow(recorder_factory=FakeRecorder, monitors=fake_monitors, nvenc=False, config=cfg)
+    qtbot.addWidget(w)
+    w._seg_buttons["monitor"].setChecked(True)
+    w._toggle_record()
+
+    out = FakeRecorder.instances[-1].settings.output_path
+    assert os.path.dirname(out) == str(missing_dir)
+    assert missing_dir.exists()       # directory was created
+
+
+# ---------------------------------------- GUI config round-trip on close
+
+def test_close_reopen_preserves_settings(qtbot, fake_monitors, tmp_path, monkeypatch):
+    """Change controls, close window, open a new one with the same config
+    paths -> the new window comes up with the same values."""
+    from screen_recorder import config as cfgmod
+    from screen_recorder.config import Config
+
+    monkeypatch.setattr(cfgmod, "config_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(cfgmod, "config_path", lambda: str(tmp_path / "c.json"))
+
+    cfg = Config(output_dir=str(tmp_path))
+    w = MainWindow(recorder_factory=FakeRecorder, monitors=fake_monitors, nvenc=False, config=cfg)
+    qtbot.addWidget(w)
+    w._fps_slider.setValue(45)
+    w._crf_slider.setValue(20)
+    w._res_combo.setCurrentIndex(0)  # 480p
+    w._timestamp_cb.setChecked(False)
+    w.close()    # triggers _capture_config().save()
+
+    # Open a fresh window using Config.load() — the on-disk config is the seam.
+    w2 = MainWindow(
+        recorder_factory=FakeRecorder, monitors=fake_monitors, nvenc=False,
+        config=Config.load(),
+    )
+    qtbot.addWidget(w2)
+    assert w2._fps_slider.value() == 45
+    assert w2._crf_slider.value() == 20
+    assert w2._res_combo.currentData() == 480
+    assert w2._timestamp_cb.isChecked() is False
