@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Virtual environment
+.venv/
+
+# Editor / assistant
+.claude/
+CLAUDE.md
+
+# Recording outputs (test artifacts)
+recording.mkv
+recording.mp4
+*.tmp.*
