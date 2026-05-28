@@ -33,21 +33,37 @@ def default_output_dir() -> str:
     return os.path.join(videos, _APP_DIR_NAME)
 
 
-def timestamped_filename(ext: str = "mp4") -> str:
-    return f"recording-{datetime.now():%Y-%m-%d_%H-%M-%S}.{ext}"
+_DEFAULT_BASE = "recording"
+_INVALID_FILENAME_CHARS = '<>:"/\\|?*'
+
+
+def sanitize_base(name: str) -> str:
+    """Clean a user-typed filename stem: strip whitespace, invalid Windows
+    filename chars, and any ``.mp4``/``.mkv`` extension the user typed in.
+    Falls back to ``"recording"`` if nothing useful is left."""
+    s = (name or "").strip()
+    if s.lower().endswith((".mp4", ".mkv")):
+        s = s[:-4]
+    s = "".join(c for c in s if c not in _INVALID_FILENAME_CHARS).strip()
+    return s or _DEFAULT_BASE
+
+
+def _timestamp() -> str:
+    return f"{datetime.now():%Y-%m-%d_%H-%M-%S}"
 
 
 @dataclass
 class Config:
     """Remembered user preferences. Values are the *defaults* until overridden."""
 
-    output_dir: str = ""          # filled from default_output_dir() if blank
-    resolution: int = 720         # target height in px
+    output_dir: str = ""           # filled from default_output_dir() if blank
+    base_name: str = "recording"   # filename stem (before any timestamp + extension)
+    resolution: int = 720          # target height in px
     fps: int = 30
     crf: int = 16
     use_nvenc: bool = False
-    container: str = "mp4"        # "mp4" or "mkv"
-    append_timestamp: bool = True  # auto-name with timestamp; otherwise use a fixed name
+    container: str = "mp4"         # "mp4" or "mkv" — power users edit JSON to switch
+    append_timestamp: bool = True  # if True, suffix the base name with the current timestamp
 
     def __post_init__(self) -> None:
         if not self.output_dir:
@@ -83,15 +99,22 @@ class Config:
     def next_output_path(self, exists: Callable[[str], bool] = os.path.exists) -> str:
         """Path the next recording should write to, given the current settings.
 
-        With ``append_timestamp`` on: a timestamped name; if a same-second
-        collision exists, a ``-1``/``-2``/… suffix is appended until the path is
-        free. With it off: the fixed name ``recording.<ext>`` (caller decides
-        whether to overwrite).
+        Rule: ``<output_dir>/<base>[-<timestamp>].<container>``, with a
+        ``-1``/``-2``/… suffix appended to make it collision-free. The
+        ``append_timestamp`` flag is purely additive — it never replaces or
+        removes any other part of the name.
         """
+        base = sanitize_base(self.base_name)
         if self.append_timestamp:
-            base = timestamped_filename(self.container)
-            return _collision_free(os.path.join(self.output_dir, base), exists)
-        return os.path.join(self.output_dir, f"recording.{self.container}")
+            base = f"{base}-{_timestamp()}"
+        path = os.path.join(self.output_dir, f"{base}.{self.container}")
+        # Auto-suffix only when timestamping is on (two timestamped recordings
+        # within the same second would otherwise collide). With timestamping
+        # off, the user picked an exact name — preserve it and let the caller
+        # decide whether to overwrite.
+        if self.append_timestamp:
+            path = _collision_free(path, exists)
+        return path
 
 
 def _collision_free(path: str, exists: Callable[[str], bool] = os.path.exists) -> str:

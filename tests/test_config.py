@@ -104,3 +104,40 @@ def test_append_timestamp_persists_through_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setattr(cfgmod, "config_path", lambda: str(tmp_path / "config.json"))
     Config(append_timestamp=False).save()
     assert Config.load().append_timestamp is False
+
+
+# -------------------------------------------------- base name + sanitize
+
+def test_custom_base_name_with_timestamp(tmp_path):
+    """Principle 1: append_timestamp adds to the base, doesn't replace it."""
+    c = Config(output_dir=str(tmp_path), base_name="meeting", append_timestamp=True)
+    name = os.path.basename(c.next_output_path())
+    assert name.startswith("meeting-")
+    assert name.endswith(".mp4")
+    assert name != "meeting.mp4"             # something was appended
+
+
+def test_custom_base_name_without_timestamp(tmp_path):
+    c = Config(output_dir=str(tmp_path), base_name="meeting", append_timestamp=False)
+    assert os.path.basename(c.next_output_path()) == "meeting.mp4"
+
+
+def test_sanitize_strips_typed_extension():
+    from screen_recorder.config import sanitize_base
+    assert sanitize_base("test.mp4") == "test"
+    assert sanitize_base("test.MKV") == "test"
+
+
+def test_sanitize_strips_invalid_windows_chars():
+    from screen_recorder.config import sanitize_base
+    # The result must be a valid Windows filename component.
+    cleaned = sanitize_base('a<b>:c"/d\\e|f?g*h')
+    for ch in '<>:"/\\|?*':
+        assert ch not in cleaned
+
+
+def test_sanitize_empty_falls_back_to_default():
+    from screen_recorder.config import sanitize_base
+    assert sanitize_base("") == "recording"
+    assert sanitize_base("   ") == "recording"
+    assert sanitize_base(":?*") == "recording"

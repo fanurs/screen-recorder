@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QSlider,
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
 
 from . import estimate
 from .assets import icon_path
-from .config import Config
+from .config import Config, sanitize_base
 from .encoder import nvenc_usable
 from .monitor_flash import MonitorFlash
 from .monitors import Monitor, list_monitors
@@ -136,9 +137,6 @@ class MainWindow(QWidget):
         self._region: Rect | None = None
         self._region_selector: RegionSelector | None = None
         self._region_border: RegionBorder | None = None
-        # An explicit "Save to…" override, or None to auto-generate a timestamped
-        # path in the configured output directory at record time.
-        self._explicit_output: str | None = None
         self._last_saved_path: str | None = None
         self._nvenc = nvenc_usable() if nvenc is None else nvenc
         self._monitors: list[Monitor] = monitors if monitors is not None else list_monitors()
@@ -276,17 +274,31 @@ class MainWindow(QWidget):
         grid.setColumnStretch(1, 1)
         out.addLayout(grid)
 
-        file_row = QHBoxLayout()
-        self._file_btn = QPushButton("Save to…")
-        self._file_btn.setObjectName("secondary")
-        self._file_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._file_btn.clicked.connect(self._choose_file)
-        self._file_label = QLabel()
-        self._file_label.setObjectName("filePath")
-        self._file_label.setWordWrap(True)
-        file_row.addWidget(self._file_btn)
-        file_row.addWidget(self._file_label, 1)
-        out.addLayout(file_row)
+        path_grid = QGridLayout()
+        path_grid.setHorizontalSpacing(12)
+        path_grid.setVerticalSpacing(8)
+
+        path_grid.addWidget(QLabel("Folder"), 0, 0)
+        self._folder_label = QLabel()
+        self._folder_label.setObjectName("filePath")
+        self._folder_label.setWordWrap(True)
+        path_grid.addWidget(self._folder_label, 0, 1)
+        self._folder_btn = QPushButton("Browse…")
+        self._folder_btn.setObjectName("secondary")
+        self._folder_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._folder_btn.clicked.connect(self._choose_folder)
+        path_grid.addWidget(self._folder_btn, 0, 2)
+
+        path_grid.addWidget(QLabel("Name"), 1, 0)
+        self._name_edit = QLineEdit()
+        self._name_edit.setPlaceholderText("recording")
+        self._name_edit.editingFinished.connect(self._on_name_edited)
+        path_grid.addWidget(self._name_edit, 1, 1)
+        self._ext_label = QLabel(".mp4")
+        path_grid.addWidget(self._ext_label, 1, 2)
+
+        path_grid.setColumnStretch(1, 1)
+        out.addLayout(path_grid)
 
         self._timestamp_cb = QCheckBox("Append timestamp to filename")
         self._timestamp_cb.setChecked(True)
@@ -347,7 +359,9 @@ class MainWindow(QWidget):
             if i >= 0:
                 self._enc_combo.setCurrentIndex(i)
         self._timestamp_cb.setChecked(c.append_timestamp)
-        self._update_file_label()
+        self._name_edit.setText(c.base_name)
+        self._ext_label.setText(f".{c.container}")
+        self._update_folder_label()
 
     def _capture_config(self) -> Config:
         """Snapshot the current control values into a Config for persistence."""
@@ -356,40 +370,26 @@ class MainWindow(QWidget):
         self._config.crf = self._crf_slider.value()
         self._config.use_nvenc = bool(self._enc_combo.currentData())
         self._config.append_timestamp = self._timestamp_cb.isChecked()
+        self._config.base_name = sanitize_base(self._name_edit.text())
         return self._config
 
     def _on_timestamp_toggled(self, checked: bool) -> None:
         self._config.append_timestamp = checked
-        # Toggling the auto-naming mode invalidates any prior explicit path
-        # the user picked — the new mode should be honoured for the next run.
-        self._explicit_output = None
-        self._update_file_label()
 
-    def _update_file_label(self) -> None:
-        if self._explicit_output:
-            self._file_label.setText(self._explicit_output)
-        elif self._config.append_timestamp:
-            self._file_label.setText(
-                f"{self._config.output_dir}\\  (auto-named, timestamped)"
-            )
-        else:
-            self._file_label.setText(
-                f"{self._config.output_dir}\\recording.{self._config.container}"
-            )
+    def _on_name_edited(self) -> None:
+        cleaned = sanitize_base(self._name_edit.text())
+        if cleaned != self._name_edit.text():
+            self._name_edit.setText(cleaned)
+        self._config.base_name = cleaned
+
+    def _update_folder_label(self) -> None:
+        self._folder_label.setText(self._config.output_dir)
 
     def _resolve_output_path(self) -> str:
         """The path this recording will be written to."""
-        return self._explicit_output or self._config.next_output_path()
-
-    def _needs_overwrite_prompt(self, path: str) -> bool:
-        """True when an existing file at ``path`` could be silently clobbered.
-
-        Auto-timestamped paths are already collision-free, so we only need to
-        guard the fixed-name and explicit ``Save to…`` cases.
-        """
-        if self._explicit_output:
-            return True
-        return not self._config.append_timestamp
+        # Make sure the live edit value (not just the saved one) is used.
+        self._config.base_name = sanitize_base(self._name_edit.text())
+        return self._config.next_output_path()
 
     # ------------------------------------------------------------- population
     def _populate_windows(self) -> None:
@@ -513,22 +513,13 @@ class MainWindow(QWidget):
         self.activateWindow()
 
     # ------------------------------------------------------------------- file
-    def _choose_file(self) -> None:
-        suggested = self._resolve_output_path()
-        path, selected = QFileDialog.getSaveFileName(
-            self,
-            "Save recording",
-            suggested,
-            "MP4 Video (*.mp4);;Matroska Video (*.mkv)",
+    def _choose_folder(self) -> None:
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose recording folder", self._config.output_dir
         )
-        if path:
-            if not path.lower().endswith((".mp4", ".mkv")):
-                path += ".mkv" if "mkv" in selected.lower() else ".mp4"
-            self._explicit_output = path
-            # Remember the chosen folder + container as the new defaults.
-            self._config.output_dir = os.path.dirname(path)
-            self._config.container = "mkv" if path.lower().endswith(".mkv") else "mp4"
-            self._update_file_label()
+        if chosen:
+            self._config.output_dir = chosen
+            self._update_folder_label()
 
     def _open_last_file(self) -> None:
         if self._last_saved_path and os.path.exists(self._last_saved_path):
@@ -562,10 +553,10 @@ class MainWindow(QWidget):
             QMessageBox.critical(self, "Cannot save there", f"Could not create the output folder:\n{exc}")
             return
 
-        # When timestamping is on, next_output_path() already returned a
-        # collision-free path. Otherwise (fixed name or explicit Save to…),
-        # confirm before silently clobbering an existing recording.
-        if self._needs_overwrite_prompt(output_path) and os.path.exists(output_path):
+        # With timestamping on, next_output_path() already returned a
+        # collision-free path. With it off, the path can collide — confirm
+        # before silently clobbering an existing recording.
+        if not self._config.append_timestamp and os.path.exists(output_path):
             reply = QMessageBox.question(
                 self,
                 "Overwrite existing file?",
@@ -659,7 +650,8 @@ class MainWindow(QWidget):
         widgets = [
             self._monitor_combo, self._identify_btn, self._region_btn,
             self._window_combo, self._refresh_windows_btn, self._res_combo,
-            self._fps_slider, self._crf_slider, self._enc_combo, self._file_btn,
+            self._fps_slider, self._crf_slider, self._enc_combo,
+            self._folder_btn, self._name_edit, self._timestamp_cb,
         ]
         widgets += list(self._seg_buttons.values())
         for w in widgets:

@@ -216,12 +216,56 @@ def test_default_output_is_auto_timestamped_in_config_dir(window, tmp_path):
     assert "recording-" in out and out.endswith(".mp4")
 
 
-def test_explicit_save_path_overrides_auto(window, tmp_path):
-    explicit = str(tmp_path / "demo.mkv")
-    window._explicit_output = explicit
+def test_custom_name_with_timestamp_appends_timestamp(window, tmp_path):
+    """Principle 1: 'Append timestamp' really just appends a timestamp to
+    whatever base name the user typed — it doesn't replace it."""
+    window._name_edit.setText("meeting")
+    window._timestamp_cb.setChecked(True)
     window._seg_buttons["monitor"].setChecked(True)
     window._toggle_record()
-    assert FakeRecorder.instances[-1].settings.output_path == explicit
+    out = FakeRecorder.instances[-1].settings.output_path
+    fname = os.path.basename(out)
+    # The base name is preserved AND a timestamp is appended.
+    assert fname.startswith("meeting-")
+    assert fname.endswith(".mp4")
+    assert fname != "meeting.mp4"        # something was added
+
+
+def test_custom_name_without_timestamp_uses_exact_base(window, tmp_path, monkeypatch):
+    # Auto-accept the overwrite prompt if the file happens to already exist.
+    monkeypatch.setattr(
+        "screen_recorder.gui.QMessageBox.question",
+        lambda *a, **k: __import__("PySide6").QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+    window._name_edit.setText("clip")
+    window._timestamp_cb.setChecked(False)
+    window._seg_buttons["monitor"].setChecked(True)
+    window._toggle_record()
+    out = FakeRecorder.instances[-1].settings.output_path
+    assert os.path.basename(out) == "clip.mp4"
+
+
+def test_typed_extension_in_name_is_stripped(window, tmp_path):
+    """User typing 'test.mp4' should not yield 'test.mp4.mp4' or similar."""
+    window._name_edit.setText("test.mp4")
+    window._timestamp_cb.setChecked(False)
+    window._seg_buttons["monitor"].setChecked(True)
+    window._toggle_record()
+    out = FakeRecorder.instances[-1].settings.output_path
+    assert os.path.basename(out) == "test.mp4"   # exactly one .mp4 suffix
+
+
+def test_empty_name_falls_back_to_default(window, monkeypatch):
+    monkeypatch.setattr(
+        "screen_recorder.gui.QMessageBox.question",
+        lambda *a, **k: __import__("PySide6").QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+    window._name_edit.setText("   ")
+    window._timestamp_cb.setChecked(False)
+    window._seg_buttons["monitor"].setChecked(True)
+    window._toggle_record()
+    out = FakeRecorder.instances[-1].settings.output_path
+    assert os.path.basename(out) == "recording.mp4"
 
 
 def test_capture_config_reflects_controls(window):
@@ -345,6 +389,7 @@ def test_close_reopen_preserves_settings(qtbot, fake_monitors, tmp_path, monkeyp
     w._crf_slider.setValue(20)
     w._res_combo.setCurrentIndex(0)  # 480p
     w._timestamp_cb.setChecked(False)
+    w._name_edit.setText("standup")
     w.close()    # triggers _capture_config().save()
 
     # Open a fresh window using Config.load() — the on-disk config is the seam.
@@ -357,3 +402,4 @@ def test_close_reopen_preserves_settings(qtbot, fake_monitors, tmp_path, monkeyp
     assert w2._crf_slider.value() == 20
     assert w2._res_combo.currentData() == 480
     assert w2._timestamp_cb.isChecked() is False
+    assert w2._name_edit.text() == "standup"
