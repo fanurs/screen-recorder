@@ -17,7 +17,7 @@ def _set_app_user_model_id() -> None:
     and grouping instead of bundling under generic 'python.exe'."""
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
-            "fanur.screenrecorder.1"
+            "screen-recorder.app.1"
         )
     except Exception:
         pass
