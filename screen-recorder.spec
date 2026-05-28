@@ -18,7 +18,7 @@ ICON_PATH = PROJECT_ROOT / "src" / "screen_recorder" / "assets" / "app.ico"
 FFMPEG_EXE = Path(imageio_ffmpeg.get_ffmpeg_exe())
 
 a = Analysis(
-    [str(PROJECT_ROOT / "src" / "screen_recorder" / "__main__.py")],
+    [str(PROJECT_ROOT / "run.py")],
     pathex=[str(PROJECT_ROOT / "src")],
     binaries=[
         # Drop ffmpeg.exe under the same relative location our code expects
