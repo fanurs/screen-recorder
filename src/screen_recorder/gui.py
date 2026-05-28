@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 
 from . import estimate
 from .assets import icon_path
+from .config import Config
 from .encoder import nvenc_usable
 from .monitor_flash import MonitorFlash
 from .monitors import Monitor, list_monitors
@@ -113,10 +114,12 @@ class MainWindow(QWidget):
         recorder_factory: Callable[[RecordSettings], Recorder] = Recorder,
         monitors: list[Monitor] | None = None,
         nvenc: bool | None = None,
+        config: Config | None = None,
     ) -> None:
-        """``recorder_factory``, ``monitors`` and ``nvenc`` are injectable so the
-        window can be driven in tests without a real recorder, real screens, or a
-        real GPU probe. Production code uses the defaults."""
+        """``recorder_factory``, ``monitors``, ``nvenc`` and ``config`` are
+        injectable so the window can be driven in tests without a real recorder,
+        real screens, a real GPU probe, or touching the user's config file.
+        Production code uses the defaults."""
         super().__init__()
         self.setObjectName("root")
         self.setWindowTitle("Screen Recorder")
@@ -126,18 +129,22 @@ class MainWindow(QWidget):
         if _ico:
             self.setWindowIcon(QIcon(_ico))
 
+        self._config = config if config is not None else Config.load()
         self._recorder_factory = recorder_factory
         self._recorder: Recorder | None = None
         self._region: Rect | None = None
         self._region_selector: RegionSelector | None = None
         self._region_border: RegionBorder | None = None
-        self._output_path = os.path.abspath("recording.mp4")
+        # An explicit "Save to…" override, or None to auto-generate a timestamped
+        # path in the configured output directory at record time.
+        self._explicit_output: str | None = None
         self._last_saved_path: str | None = None
         self._nvenc = nvenc_usable() if nvenc is None else nvenc
         self._monitors: list[Monitor] = monitors if monitors is not None else list_monitors()
         self._monitor_flash = MonitorFlash()
 
         self._build_ui()
+        self._apply_config()
         self._refresh_estimate()
 
         self._stats_timer = QTimer(self)
@@ -273,7 +280,7 @@ class MainWindow(QWidget):
         self._file_btn.setObjectName("secondary")
         self._file_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._file_btn.clicked.connect(self._choose_file)
-        self._file_label = QLabel(self._output_path)
+        self._file_label = QLabel()
         self._file_label.setObjectName("filePath")
         self._file_label.setWordWrap(True)
         file_row.addWidget(self._file_btn)
@@ -315,6 +322,41 @@ class MainWindow(QWidget):
         root.addWidget(self._open_row_widget)
 
         self._on_mode_changed()
+
+    # ------------------------------------------------------------------ config
+    def _apply_config(self) -> None:
+        """Seed the controls from the remembered config."""
+        c = self._config
+        i = self._res_combo.findData(c.resolution)
+        if i >= 0:
+            self._res_combo.setCurrentIndex(i)
+        self._fps_slider.setValue(c.fps)
+        self._crf_slider.setValue(c.crf)
+        if c.use_nvenc and self._nvenc:
+            i = self._enc_combo.findData(True)
+            if i >= 0:
+                self._enc_combo.setCurrentIndex(i)
+        self._update_file_label()
+
+    def _capture_config(self) -> Config:
+        """Snapshot the current control values into a Config for persistence."""
+        self._config.resolution = self._res_combo.currentData()
+        self._config.fps = self._fps_slider.value()
+        self._config.crf = self._crf_slider.value()
+        self._config.use_nvenc = bool(self._enc_combo.currentData())
+        return self._config
+
+    def _update_file_label(self) -> None:
+        if self._explicit_output:
+            self._file_label.setText(self._explicit_output)
+        else:
+            self._file_label.setText(
+                f"{self._config.output_dir}\\  (auto-named, timestamped)"
+            )
+
+    def _resolve_output_path(self) -> str:
+        """The path this recording will be written to."""
+        return self._explicit_output or self._config.next_output_path()
 
     # ------------------------------------------------------------- population
     def _populate_windows(self) -> None:
@@ -439,17 +481,21 @@ class MainWindow(QWidget):
 
     # ------------------------------------------------------------------- file
     def _choose_file(self) -> None:
+        suggested = self._resolve_output_path()
         path, selected = QFileDialog.getSaveFileName(
             self,
             "Save recording",
-            self._output_path,
+            suggested,
             "MP4 Video (*.mp4);;Matroska Video (*.mkv)",
         )
         if path:
             if not path.lower().endswith((".mp4", ".mkv")):
                 path += ".mkv" if "mkv" in selected.lower() else ".mp4"
-            self._output_path = path
-            self._file_label.setText(path)
+            self._explicit_output = path
+            # Remember the chosen folder + container as the new defaults.
+            self._config.output_dir = os.path.dirname(path)
+            self._config.container = "mkv" if path.lower().endswith(".mkv") else "mp4"
+            self._update_file_label()
 
     def _open_last_file(self) -> None:
         if self._last_saved_path and os.path.exists(self._last_saved_path):
@@ -476,6 +522,13 @@ class MainWindow(QWidget):
             QMessageBox.warning(self, "No window", "No window selected.")
             return
 
+        output_path = self._resolve_output_path()
+        try:
+            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        except OSError as exc:
+            QMessageBox.critical(self, "Cannot save there", f"Could not create the output folder:\n{exc}")
+            return
+
         m = self._selected_monitor()
         capture_index = m.capture_index if m else 1
         settings = RecordSettings(
@@ -486,7 +539,7 @@ class MainWindow(QWidget):
             fps=self._fps_slider.value(),
             crf=self._crf_slider.value(),
             use_nvenc=bool(self._enc_combo.currentData()),
-            output_path=self._output_path,
+            output_path=output_path,
         )
         self._recorder = self._recorder_factory(settings)
         try:
@@ -571,4 +624,5 @@ class MainWindow(QWidget):
             self._recorder = None
         self._clear_region_border()
         self._monitor_flash.clear()
+        self._capture_config().save()   # remember settings for next launch
         event.accept()

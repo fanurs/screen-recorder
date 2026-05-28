@@ -15,3 +15,7 @@ CLAUDE.md
 recording.mkv
 recording.mp4
 *.tmp.*
+
+# PyInstaller build artifacts
+build/
+dist/

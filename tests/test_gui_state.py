@@ -56,9 +56,22 @@ def fake_monitors():
 
 
 @pytest.fixture
-def window(qtbot, fake_monitors):
+def window(qtbot, fake_monitors, tmp_path, monkeypatch):
+    from screen_recorder import config as cfgmod
+    from screen_recorder.config import Config
+
     FakeRecorder.instances.clear()
-    w = MainWindow(recorder_factory=FakeRecorder, monitors=fake_monitors, nvenc=False)
+    # Inject a throwaway config + redirect the save path, so closeEvent's
+    # "remember last used" write doesn't touch the real %APPDATA% file.
+    monkeypatch.setattr(cfgmod, "config_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(cfgmod, "config_path", lambda: str(tmp_path / "config.json"))
+    cfg = Config(output_dir=str(tmp_path))
+    w = MainWindow(
+        recorder_factory=FakeRecorder,
+        monitors=fake_monitors,
+        nvenc=False,
+        config=cfg,
+    )
     qtbot.addWidget(w)
     return w
 
@@ -189,3 +202,40 @@ def test_estimate_updates_with_controls(window):
 def test_quality_label_shows_crf_number(window):
     window._crf_slider.setValue(14)
     assert "CRF 14" in window._crf_label.text()
+
+
+# ----------------------------------------------------------------- config
+
+def test_default_output_is_auto_timestamped_in_config_dir(window, tmp_path):
+    window._seg_buttons["monitor"].setChecked(True)
+    window._toggle_record()
+    out = FakeRecorder.instances[-1].settings.output_path
+    assert out.startswith(str(tmp_path))
+    assert "recording-" in out and out.endswith(".mp4")
+
+
+def test_explicit_save_path_overrides_auto(window, tmp_path):
+    explicit = str(tmp_path / "demo.mkv")
+    window._explicit_output = explicit
+    window._seg_buttons["monitor"].setChecked(True)
+    window._toggle_record()
+    assert FakeRecorder.instances[-1].settings.output_path == explicit
+
+
+def test_capture_config_reflects_controls(window):
+    window._fps_slider.setValue(24)
+    window._crf_slider.setValue(20)
+    window._res_combo.setCurrentIndex(0)  # 480p
+    cfg = window._capture_config()
+    assert cfg.fps == 24 and cfg.crf == 20 and cfg.resolution == 480
+
+
+def test_config_seeds_controls_on_launch(qtbot, fake_monitors, tmp_path):
+    from screen_recorder.config import Config
+
+    cfg = Config(output_dir=str(tmp_path), resolution=1080, fps=50, crf=22)
+    w = MainWindow(recorder_factory=FakeRecorder, monitors=fake_monitors, nvenc=False, config=cfg)
+    qtbot.addWidget(w)
+    assert w._res_combo.currentData() == 1080
+    assert w._fps_slider.value() == 50
+    assert w._crf_slider.value() == 22

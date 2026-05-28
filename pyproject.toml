@@ -19,6 +19,7 @@ screen-recorder = "screen_recorder.__main__:main"
 dev = [
     "pytest>=8.0",
     "pytest-qt>=4.4",
+    "pyinstaller>=6.10",
 ]
 
 [tool.pytest.ini_options]
