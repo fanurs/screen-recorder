@@ -19,3 +19,7 @@ recording.mp4
 # PyInstaller build artifacts
 build/
 dist/
+
+# Release artifacts (uploaded to GitHub Releases, not tracked)
+ScreenRecorder-*.zip
+RELEASE_NOTES_*.md
