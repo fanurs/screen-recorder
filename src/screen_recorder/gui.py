@@ -28,7 +28,6 @@ from .assets import icon_path
 from .encoder import nvenc_usable
 from .monitor_flash import MonitorFlash
 from .monitors import Monitor, list_monitors
-
 from .processing import Rect
 from .recorder import RecordSettings, Recorder, planned_output_size
 from .region import RegionSelector
@@ -542,9 +541,6 @@ class MainWindow(QWidget):
         if stats.error:
             self._stop_recording()
             return
-        self._stats_label.setObjectName("statsRec")
-        self._stats_label.setStyleSheet("")  # re-evaluate via object name
-        self._stats_label.style().polish(self._stats_label)
         self._stats_label.setText(
             f"● REC   {stats.elapsed:5.1f}s    {stats.measured_fps:4.1f} Hz    "
             f"encoded {stats.encoded}    dropped {stats.dropped}"
@@ -554,9 +550,10 @@ class MainWindow(QWidget):
         self._record_btn.setProperty("recording", recording)
         self._record_btn.style().unpolish(self._record_btn)
         self._record_btn.style().polish(self._record_btn)
-        if not recording:
-            self._stats_label.setObjectName("stats")
-            self._stats_label.style().polish(self._stats_label)
+        # Recolor the stats line red while recording, normal otherwise.
+        self._stats_label.setObjectName("statsRec" if recording else "stats")
+        self._stats_label.style().unpolish(self._stats_label)
+        self._stats_label.style().polish(self._stats_label)
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         widgets = [

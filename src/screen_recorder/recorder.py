@@ -30,7 +30,6 @@ from .processing import Rect, crop_and_resize, output_dimensions
 @dataclass
 class RecordSettings:
     monitor_index: int | None = None
-    window_name: str | None = None
     window_hwnd: int | None = None
     region: Rect | None = None       # in source-frame pixel coords; None = whole frame
     target_height: int = 720
@@ -99,7 +98,6 @@ class Recorder:
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._stats = Stats()
-        self._out_size: tuple[int, int] | None = None
         # Always encode to a crash-safe MKV intermediate; remux to the final
         # (.mp4 or .mkv) container on stop.
         fd, self._temp_mkv = tempfile.mkstemp(suffix=".mkv", prefix="screenrec_")
@@ -126,7 +124,6 @@ class Recorder:
 
         self._capture = ScreenCapture(
             monitor_index=s.monitor_index,
-            window_name=s.window_name,
             window_hwnd=s.window_hwnd,
             cursor_capture=s.cursor_capture,
             minimum_update_interval=update_interval,
@@ -140,7 +137,6 @@ class Recorder:
         assert first is not None
         sample = crop_and_resize(first, s.region, s.target_height)
         out_h, out_w = sample.shape[0], sample.shape[1]
-        self._out_size = (out_w, out_h)
 
         self._encoder = FfmpegEncoder(
             EncoderConfig(

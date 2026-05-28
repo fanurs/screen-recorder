@@ -1,9 +1,10 @@
 """FFmpeg-backed H.264 encoder.
 
-Frames are written as raw BGR bytes to FFmpeg's stdin and encoded to an MKV
-container. FFmpeg ships bundled via ``imageio-ffmpeg`` so no system install is
-required. Two codecs are supported: software ``libx264`` (always available) and
-``h264_nvenc`` (NVIDIA GPUs only, auto-probed).
+Frames are written as raw BGR bytes to FFmpeg's stdin and encoded into an MKV
+intermediate (crash-safe); :func:`remux_to_mp4` later rewraps the stream into the
+final container losslessly. FFmpeg ships bundled via ``imageio-ffmpeg`` so no
+system install is required. Two codecs are supported: software ``libx264``
+(always available) and ``h264_nvenc`` (NVIDIA GPUs only, auto-probed).
 """
 
 from __future__ import annotations
@@ -13,23 +14,21 @@ from dataclasses import dataclass
 
 import imageio_ffmpeg
 
+# Suppress the console window FFmpeg would otherwise pop up on Windows.
+_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+_nvenc_cache: bool | None = None
+
 
 def ffmpeg_exe() -> str:
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-_nvenc_cache: bool | None = None
-
-
-# Suppress the console window FFmpeg would otherwise pop up on Windows.
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-
-
-def nvenc_available() -> bool:
-    """Whether the bundled FFmpeg lists the ``h264_nvenc`` encoder.
+def _nvenc_compiled_in() -> bool:
+    """Whether the bundled FFmpeg lists the ``h264_nvenc`` encoder (cached).
 
     This only proves the encoder is compiled in, not that a working GPU/driver
-    is present. Use :func:`nvenc_usable` to confirm it can actually encode.
+    is present — :func:`nvenc_usable` confirms it can actually encode.
     """
     global _nvenc_cache
     if _nvenc_cache is not None:
@@ -55,7 +54,7 @@ def nvenc_usable() -> bool:
     encodes it to nul. Returns False on any failure: no NVIDIA GPU, outdated
     driver, or a session limit. This is the real runtime check before recording.
     """
-    if not nvenc_available():
+    if not _nvenc_compiled_in():
         return False
     try:
         proc = subprocess.run(

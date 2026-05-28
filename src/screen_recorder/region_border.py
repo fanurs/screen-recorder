@@ -49,7 +49,6 @@ class RegionBorder(QWidget):
         b = _BORDER
         # Window encloses the region plus the outside ring.
         win = QRect(round(rx - b), round(ry - b), round(rw + 2 * b), round(rh + 2 * b))
-        # Clamp so the ring stays on-screen even if the region hugs an edge.
         self.createWinId()
         handle = self.windowHandle()
         if handle is not None:
